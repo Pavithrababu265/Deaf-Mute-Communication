@@ -1,0 +1,48 @@
+# Goal Description
+
+Currently, the avatar playback only shows a single random frame per word and breaks phrases like "What is your Name?" into individual words that are not recognized. This change will correctly play back full recorded gesture sequences (animations) for recognized phrases, words, and fall back to spelling out letters if a word is missing from the dataset.
+
+## Proposed Changes
+
+### src/gesture_player.py
+- [MODIFY] [src/gesture_player.py](file:///d:/Deaf-Mute%20Communication/src/gesture_player.py)
+  - **Change 1:** Add a new method [get_gesture_sequence(self, text)](file:///d:/Deaf-Mute%20Communication/src/gesture_player.py#51-78) that searches for exactly matching gestures (ignoring punctuation/case). Instead of returning a single random frame, it returns a list of formatted landmark frames representing the entire sequence for that sign.
+  - **Change 2:** Improve matching logic to remove punctuation (`?`, `!`, `,`, etc.) when searching for keys in `self.data_by_label`. This ensures texts like "what is your name" match the recorded label "what is your Name?".
+
+### src/main_gui.py
+- [MODIFY] [src/main_gui.py](file:///d:/Deaf-Mute%20Communication/src/main_gui.py)
+  - **Change 1:** Update [_play_avatar_thread(self, text)](file:///d:/Deaf-Mute%20Communication/src/main_gui.py#333-393) to implement a tiered lookup:
+    1. Try to play the full exact phrase ([text](file:///d:/Deaf-Mute%20Communication/src/gesture_player.py#23-25)) as a single gesture sequence.
+    2. If not found, split the text into individual words and try to play each word.
+    3. If a word is not found, spell it out character-by-character (using A-Z labels).
+  - **Change 2:** Create an animation loop for the returned sequence of frames:
+    - Iterate through each frame in the sequence.
+    - Update `avatar_controller` and display the image with a small frame delay (e.g., `time.sleep(0.05)`) instead of blocking for `1.5` seconds on a single random frame.
+    - **Change 3 (Refinement):** Implement Greedy Phrase Matching. If the input sentence contains multiple known phrases (e.g., "Hello what is your Name?"), standard word-splitting fails to identify them. The logic will iterate and consume the longest matching subsequence of words that corresponds to a gesture phrase.
+
+### src/gesture_player.py
+- [MODIFY] [src/gesture_player.py](file:///d:/Deaf-Mute%20Communication/src/gesture_player.py)
+  - **Change:** Cap the number of frames returned by [get_gesture_sequence()](file:///d:/Deaf-Mute%20Communication/src/gesture_player.py#51-78) to a maximum of `40` frames (approx 2.0 seconds of animation). The dataset contains hundreds of frames per label because of loop recording during data collection. Returning all 600 frames causes the avatar to replay the sign repetitively. Limiting to 40 ensures it only plays **one time**.
+
+### src/web_bridge.py
+- [MODIFY] [src/web_bridge.py](file:///d:/Deaf-Mute%20Communication/src/web_bridge.py)
+  - **Change 1:** Modify [_play_web_avatar_thread](file:///d:/Deaf-Mute%20Communication/src/web_bridge.py#81-118) to emit the ENTIRE sequence at once as an array chunk via `socketio.emit('avatar_sequence', {'landmarks': seq, ...})` instead of blasting hundreds of individual `avatar_frame` events per second, which causes browser networking glitches and buffers.
+  - **Change 2:** Keep the server loop synced by `eventlet.sleep(len(seq) * 0.05 + 0.5)` so it waits for the browser to finish rendering the bulk-sent array before sending the next word/letter in the phrase.
+
+### src/templates/index.html
+- [MODIFY] [src/templates/index.html](file:///d:/Deaf-Mute%20Communication/src/templates/index.html)
+  - **Change 1:** Add a new socket listener for `'avatar_sequence'`.
+  - **Change 2:** Implement an explicit `setInterval` loop to render the received [landmarks](file:///d:/Deaf-Mute%20Communication/src/gesture_player.py#26-50) array at a smooth `20fps` (50ms interval) completely client-side.
+  - **Change 3:** Ensure the interval clears out previous animations properly so that overlapping requests do not cause glitching.
+
+## Verification Plan
+
+### Automated Tests
+_None (GUI testing is primarily visual and manual)_
+
+### Manual Verification
+1. Open the application with `python src/main_gui.py --role Normal` (and optionally a visual instance).
+2. Type or speak the phrase "What is your Name?" into the Audio dashboard.
+3. Observe the Avatar playback window in the visual dashboard. 
+4. The Avatar should no longer display just one static hand position and skip the rest; it should play a continuous animation sequence for the full phrase.
+5. Type an unknown word like "cat", and observe if the avatar spells out "c", "a", "t" sequentially using individual gesture animations.
